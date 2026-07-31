@@ -8,6 +8,10 @@ guardrails from Class 4 wired in:
   * LOGGING   — every tool call, result, and approval is written to logs/.
   * CAP       — the loop stops after MAX_ITERATIONS no matter what.
 
+The model provider is GROQ (see config.py). Groq speaks the OpenAI-style
+chat-completions API, so if you'd rather use a different provider, you mostly
+swap the client and the model name — the loop itself stays the same.
+
 You should not need to change this file to finish the core project. Read it,
 understand it, then do your work in tools.py.
 
@@ -18,17 +22,18 @@ Run it:
 
 import sys
 import os
+import json
 import datetime
-import anthropic
+from groq import Groq, BadRequestError
 from dotenv import load_dotenv
 
 import config
 from tools import TOOL_SCHEMAS, TOOL_FUNCTIONS
 
-# Read ANTHROPIC_API_KEY from the .env file you created (see .env.example).
+# Read GROQ_API_KEY from the .env file you created (see .env.example).
 load_dotenv()
 
-client = anthropic.Anthropic()
+client = Groq()
 
 
 # ---------------------------------------------------------------------------
@@ -103,18 +108,36 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
     return str(result)
 
 
-def tool_result_block(tool_use_id: str, content: str) -> dict:
-    """Wrap a tool's output as a tool_result the model can read (the Observe step)."""
+def tool_result_block(tool_call_id: str, content: str) -> dict:
+    """Wrap a tool's output as a tool message the model can read (the Observe step)."""
     return {
-        "role": "user",
-        "content": [
-            {
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": content,
-            }
-        ],
+        "role": "tool",
+        "tool_call_id": tool_call_id,
+        "content": content,
     }
+
+
+def assistant_block(message) -> dict:
+    """
+    Turn the model's reply into a plain dict we can put back in `messages`.
+
+    The API needs to see its own tool_calls again on the next turn, so they have
+    to be carried over verbatim alongside any text it wrote.
+    """
+    block = {"role": "assistant", "content": message.content or ""}
+    if message.tool_calls:
+        block["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function.name,
+                    "arguments": call.function.arguments,
+                },
+            }
+            for call in message.tool_calls
+        ]
+    return block
 
 
 # ---------------------------------------------------------------------------
@@ -129,27 +152,59 @@ def run(goal: str) -> None:
         log(f"--- turn {turn} / {config.MAX_ITERATIONS} ---")
 
         # REASON: ask the model what to do next.
-        resp = client.messages.create(
-            model=config.MODEL,
-            max_tokens=config.MAX_TOKENS,
-            tools=TOOL_SCHEMAS,
-            messages=messages,
-        )
-        messages.append({"role": "assistant", "content": resp.content})
+        try:
+            resp = client.chat.completions.create(
+                model=config.MODEL,
+                max_tokens=config.MAX_TOKENS,
+                tools=TOOL_SCHEMAS,
+                messages=messages,
+            )
+        except BadRequestError as exc:
+            # `tool_use_failed`: the model tried to call a tool but wrote the call
+            # in broken syntax, so Groq rejected it instead of returning tool_calls.
+            # It's a model slip, not a bug in your tools — nudge it and try again.
+            # (Weaker models do this a lot, especially with long arguments. If you
+            # see it repeatedly, switch MODEL in config.py.)
+            if "tool_use_failed" not in str(exc):
+                raise
+            log("ERROR   model wrote a malformed tool call; asking it to retry")
+            messages.append({
+                "role": "user",
+                "content": (
+                    "Your last reply tried to call a tool, but the call was malformed "
+                    "and was rejected before it ran. Call the tool again using the exact "
+                    "tool-call format, with valid JSON arguments."
+                ),
+            })
+            continue
+
+        message = resp.choices[0].message
+        messages.append(assistant_block(message))
 
         # No tool call means the model is done talking -> print and stop.
-        if resp.stop_reason != "tool_use":
-            final = "".join(b.text for b in resp.content if b.type == "text")
+        if not message.tool_calls:
             log("DONE")
             print("\n=== FINAL ANSWER ===")
-            print(final.strip())
+            print((message.content or "").strip())
             return
 
         # ACT + OBSERVE: run each requested tool, feed results back in.
-        for block in resp.content:
-            if block.type == "tool_use":
-                output = run_tool(block.name, block.input)
-                messages.append(tool_result_block(block.id, output))
+        # Every tool_call MUST get exactly one tool message back, even on failure,
+        # or the next request will be rejected.
+        for call in message.tool_calls:
+            try:
+                # Groq sends arguments as a JSON *string*, not a dict.
+                tool_input = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError as exc:
+                log(f"ERROR   bad arguments for {call.function.name}: {exc}")
+                messages.append(tool_result_block(
+                    call.id,
+                    f"Error: arguments were not valid JSON ({exc}). Try again.",
+                ))
+                continue
+
+            output = run_tool(call.function.name, tool_input)
+            messages.append(tool_result_block(call.id, output))
 
     # We only get here if the cap was hit.
     log(f"STOPPED hit the {config.MAX_ITERATIONS}-iteration cap")

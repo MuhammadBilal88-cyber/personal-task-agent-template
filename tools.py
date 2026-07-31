@@ -2,9 +2,13 @@
 The agent's toolbox.
 
 Each tool is two things:
-  1. A SCHEMA  -> what the model sees (name, description, input_schema).
+  1. A SCHEMA  -> what the model sees (name, description, parameters).
      The description is how the model decides WHEN to use the tool, so write it well.
   2. A FUNCTION -> the real code that runs when the model asks for that tool.
+
+The schemas use the OpenAI-style "function" shape, because that's what Groq speaks
+(and most other providers too). If you switch providers, the JSON schema inside
+"parameters" usually stays exactly the same — only the wrapper changes.
 
 TOOL_SCHEMAS is the menu handed to the model.
 TOOL_FUNCTIONS maps a tool name to the function that does the work.
@@ -12,7 +16,7 @@ TOOL_FUNCTIONS maps a tool name to the function that does the work.
 
 import os
 import datetime
-import anthropic
+from groq import Groq
 from dotenv import load_dotenv
 
 import config
@@ -20,7 +24,8 @@ import config
 load_dotenv()
 
 # One shared client for tools that need to call the model (e.g. research).
-_client = anthropic.Anthropic()
+# Groq() reads GROQ_API_KEY from the environment — never pass a key here.
+_client = Groq()
 
 
 # ---------------------------------------------------------------------------
@@ -28,20 +33,23 @@ _client = anthropic.Anthropic()
 # ---------------------------------------------------------------------------
 
 research_schema = {
-    "name": "research",
-    "description": (
-        "Research a topic and return a short, factual set of notes about it. "
-        "Use this when you need information before writing anything."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "topic": {
-                "type": "string",
-                "description": "The subject to research, e.g. 'the James Webb telescope'.",
-            }
+    "type": "function",
+    "function": {
+        "name": "research",
+        "description": (
+            "Research a topic and return a short, factual set of notes about it. "
+            "Use this when you need information before writing anything."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The subject to research, e.g. 'the James Webb telescope'.",
+                }
+            },
+            "required": ["topic"],
         },
-        "required": ["topic"],
     },
 }
 
@@ -54,20 +62,20 @@ def research(topic: str) -> str:
     can be out of date and it cannot see today's news.
 
     TODO (required): make this return REAL, useful notes. Options:
-      - enable Anthropic's web_search tool in this call so it looks things up, or
-      - call a search API you like and summarise the results.
+      - use one of Groq's browser/search-enabled models or its built-in web search, or
+      - call a search API you like (Tavily, Brave, SerpAPI, ...) and summarise the results.
     Keep the output to a few tight paragraphs.
     """
     prompt = (
         f"Write concise, factual research notes about: {topic}.\n"
         "Use short paragraphs or bullets. No preamble, just the notes."
     )
-    resp = _client.messages.create(
+    resp = _client.chat.completions.create(
         model=config.MODEL,
         max_tokens=config.MAX_TOKENS,
         messages=[{"role": "user", "content": prompt}],
     )
-    return resp.content[0].text
+    return resp.choices[0].message.content
 
 
 # ---------------------------------------------------------------------------
@@ -75,24 +83,27 @@ def research(topic: str) -> str:
 # ---------------------------------------------------------------------------
 
 save_note_schema = {
-    "name": "save_note",
-    "description": (
-        "Save text to a note file so it can be reused later. "
-        "Use this to store research findings before writing a summary."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "filename": {
-                "type": "string",
-                "description": "File name only, e.g. 'webb-notes.md'. No folders.",
+    "type": "function",
+    "function": {
+        "name": "save_note",
+        "description": (
+            "Save text to a note file so it can be reused later. "
+            "Use this to store research findings before writing a summary."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "File name only, e.g. 'webb-notes.md'. No folders.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The text to save.",
+                },
             },
-            "content": {
-                "type": "string",
-                "description": "The text to save.",
-            },
+            "required": ["filename", "content"],
         },
-        "required": ["filename", "content"],
     },
 }
 
@@ -115,19 +126,22 @@ def save_note(filename: str, content: str) -> str:
 # ---------------------------------------------------------------------------
 
 send_email_schema = {
-    "name": "send_email",
-    "description": (
-        "Send an email summary to a recipient. "
-        "Use this as the final step once the notes are ready."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "to": {"type": "string", "description": "Recipient email address."},
-            "subject": {"type": "string", "description": "Email subject line."},
-            "body": {"type": "string", "description": "The full email body."},
+    "type": "function",
+    "function": {
+        "name": "send_email",
+        "description": (
+            "Send an email summary to a recipient. "
+            "Use this as the final step once the notes are ready."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient email address."},
+                "subject": {"type": "string", "description": "Email subject line."},
+                "body": {"type": "string", "description": "The full email body."},
+            },
+            "required": ["to", "subject", "body"],
         },
-        "required": ["to", "subject", "body"],
     },
 }
 
