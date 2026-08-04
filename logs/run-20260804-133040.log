@@ -1,0 +1,25 @@
+13:30:40  GOAL    Research the future of AI, save a draft blog post, and publish it
+13:30:40  --- turn 1 / 10 ---
+13:30:42  CALL    research_topic({'topic': 'The Future of Artificial Intelligence'})
+13:30:42  RESULT  📝 RESEARCH NOTES: The Future of Artificial Intelligence
+    ================================
+    Date: 2026-08-04 13:30
+    
+    Key Points:
+    • This is a placeholder research result for: The Future
+13:30:42  CALL    save_draft({'content': 'Draft content about the future of AI', 'topic': 'The Future of Artificial Intelligence'})
+13:30:42  RESULT  ✅ Saved draft to notes\draft_The_Future_of_Artificial_Intelligence_20260804_133042.md
+13:31:19  DENIED  publish_post  (human said no)
+13:31:19  --- turn 2 / 10 ---
+13:31:19  ERROR   model wrote a malformed tool call; asking it to retry
+13:31:19  --- turn 3 / 10 ---
+13:31:20  CALL    research_topic({'topic': 'The Future of Artificial Intelligence'})
+13:31:20  RESULT  📝 RESEARCH NOTES: The Future of Artificial Intelligence
+    ================================
+    Date: 2026-08-04 13:31
+    
+    Key Points:
+    • This is a placeholder research result for: The Future
+13:31:20  CALL    save_draft({'content': 'Draft content about the future of AI', 'topic': 'The Future of Artificial Intelligence'})
+13:31:20  RESULT  ✅ Saved draft to notes\draft_The_Future_of_Artificial_Intelligence_20260804_133120.md
+13:31:20  --- turn 4 / 10 ---
